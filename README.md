@@ -4,13 +4,9 @@
 # Dependencies
 
 * GTK+ 3
-
 * pkg-config
-
 * gcc
-
 * make
-
 * glibc
 
 # Arch/Manjaro 
