@@ -22,3 +22,15 @@
 * sudo apt update
 
 * sudo apt install build-essential pkg-config libgtk-3-dev libc6-dev libx11-dev network-manager pulseaudio upower
+
+# Manual installation
+
+* git clone https://github.com/BakSlerz/Lum-panel
+* cd Lum-panel
+* sudo make
+
+# Installation 
+
+* sudo make
+
+  
