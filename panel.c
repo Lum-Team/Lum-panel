@@ -76,12 +76,15 @@ void launch_app(GtkWidget *item, gpointer user_data) {
     if (cmd) {
         char command[512];
         snprintf(command, sizeof(command), "%s &", cmd);
+        printf("Executing command: %s\n", command);
         system(command);
         
         // Zamknij menu Start po uruchomieniu aplikacji
         if (gtk_widget_get_visible(start_menu)) {
             gtk_widget_hide(start_menu);
         }
+    } else {
+        printf("Error: No command to execute\n");
     }
 }
 
@@ -597,10 +600,8 @@ static void on_network_icon_clicked(GtkWidget *widget, GdkEventButton *event, gp
         }
         
         network_menu = create_network_menu();
-        // Zmienione grawitacje, aby menu wyświetlało się w dół
-        gtk_menu_popup_at_widget(GTK_MENU(network_menu), widget, 
-                                GDK_GRAVITY_NORTH, GDK_GRAVITY_SOUTH, 
-                                (GdkEvent*)event);
+        // Use gtk_menu_popup_at_pointer to prevent menu from disappearing
+        gtk_menu_popup_at_pointer(GTK_MENU(network_menu), (GdkEvent*)event);
     }
 }
 
@@ -729,19 +730,52 @@ static void select_audio_input(GtkWidget *widget, gpointer user_data) {
     system(cmd);
 }
 
-// Create audio menu with available devices and options
+static void update_volume_icon() {
+    // Get the current volume and mute state
+    FILE *fp = popen("pactl get-sink-mute @DEFAULT_SINK@ | grep -q yes && echo muted || echo unmuted", "r");
+    char mute_status[10] = {0};
+    if (fp && fgets(mute_status, sizeof(mute_status), fp)) {
+        g_strstrip(mute_status);
+    }
+    if (fp) pclose(fp);
+
+    fp = popen("pactl get-sink-volume @DEFAULT_SINK@ | grep -o '[0-9]\\+%' | head -1 | tr -d '%'", "r");
+    int volume = 0;
+    if (fp && fscanf(fp, "%d", &volume) == 1) {
+        pclose(fp);
+    } else if (fp) {
+        pclose(fp);
+    }
+
+    // Set the icon based on volume and mute state
+    const char *icon_name = "audio-volume-muted";
+    if (g_strcmp0(mute_status, "muted") == 0) {
+        icon_name = "audio-volume-muted";
+    } else if (volume == 0) {
+        icon_name = "audio-volume-muted";
+    } else if (volume <= 33) {
+        icon_name = "audio-volume-low";
+    } else if (volume <= 66) {
+        icon_name = "audio-volume-medium";
+    } else {
+        icon_name = "audio-volume-high";
+    }
+
+    gtk_image_set_from_icon_name(GTK_IMAGE(volume_button), icon_name, GTK_ICON_SIZE_MENU);
+}
+
 static GtkWidget* create_audio_menu() {
     GtkWidget *menu = gtk_menu_new();
     FILE *fp;
     char line[512];
-    
+
     // Add volume slider
     GtkWidget *volume_item = gtk_menu_item_new();
     GtkWidget *volume_scale = gtk_scale_new_with_range(GTK_ORIENTATION_HORIZONTAL, 0, 100, 1);
     gtk_widget_set_size_request(volume_scale, 150, -1);
-    
+
     // Get current volume
-    fp = popen("amixer get Master | grep -o '[0-9]*%' | head -1 | tr -d '%'", "r");
+    fp = popen("pactl get-sink-volume @DEFAULT_SINK@ | grep -o '[0-9]\\+%' | head -1 | tr -d '%'", "r");
     if (fp) {
         char vol_str[10];
         if (fgets(vol_str, sizeof(vol_str), fp)) {
@@ -750,261 +784,57 @@ static GtkWidget* create_audio_menu() {
         }
         pclose(fp);
     }
-    
+
     // Connect volume change signal
     g_signal_connect(volume_scale, "value-changed", G_CALLBACK(on_volume_changed), NULL);
-    
+
     gtk_container_add(GTK_CONTAINER(volume_item), volume_scale);
     gtk_menu_shell_append(GTK_MENU_SHELL(menu), volume_item);
     gtk_widget_show_all(volume_item);
-    
+
     // Add mute toggle
     GtkWidget *mute_item = gtk_check_menu_item_new_with_label("Mute");
-    
-    // Check if currently muted
-    fp = popen("amixer get Master | grep '\\[off\\]'", "r");
+    fp = popen("pactl get-sink-mute @DEFAULT_SINK@ | grep -q yes && echo muted || echo unmuted", "r");
     if (fp) {
-        if (fgets(line, sizeof(line), fp)) {
-            is_muted = TRUE;
-            gtk_check_menu_item_set_active(GTK_CHECK_MENU_ITEM(mute_item), TRUE);
-        } else {
-            is_muted = FALSE;
+        char mute_status[10];
+        if (fgets(mute_status, sizeof(mute_status), fp)) {
+            if (g_str_has_prefix(mute_status, "muted")) {
+                gtk_check_menu_item_set_active(GTK_CHECK_MENU_ITEM(mute_item), TRUE);
+            }
         }
         pclose(fp);
     }
-    
     g_signal_connect(mute_item, "toggled", G_CALLBACK(toggle_mute), NULL);
     gtk_menu_shell_append(GTK_MENU_SHELL(menu), mute_item);
     gtk_widget_show(mute_item);
-    
+
     // Add separator
     GtkWidget *separator = gtk_separator_menu_item_new();
     gtk_menu_shell_append(GTK_MENU_SHELL(menu), separator);
     gtk_widget_show(separator);
-    
-    // Add microphone volume control
-    GtkWidget *mic_header = gtk_menu_item_new_with_label("Microphone");
-    gtk_widget_set_sensitive(mic_header, FALSE);
-    gtk_menu_shell_append(GTK_MENU_SHELL(menu), mic_header);
-    gtk_widget_show(mic_header);
-    
-    // Microphone volume slider
-    GtkWidget *mic_item = gtk_menu_item_new();
-    GtkWidget *mic_scale = gtk_scale_new_with_range(GTK_ORIENTATION_HORIZONTAL, 0, 100, 1);
-    gtk_widget_set_size_request(mic_scale, 150, -1);
-    
-    // Get current microphone volume
-    FILE *mic_fp = popen("amixer get Capture | grep -o '[0-9]*%' | head -1 | tr -d '%'", "r");
-    if (mic_fp) {
-        char vol_str[10];
-        if (fgets(vol_str, sizeof(vol_str), mic_fp)) {
-            int vol = atoi(vol_str);
-            gtk_range_set_value(GTK_RANGE(mic_scale), vol);
-        }
-        pclose(mic_fp);
-    }
-    
-    // Connect microphone volume change signal
-    g_signal_connect(mic_scale, "value-changed", G_CALLBACK(on_mic_volume_changed), NULL);
-    
-    gtk_container_add(GTK_CONTAINER(mic_item), mic_scale);
-    gtk_menu_shell_append(GTK_MENU_SHELL(menu), mic_item);
-    gtk_widget_show_all(mic_item);
-    
-    // Add microphone mute toggle
-    GtkWidget *mic_mute_item = gtk_check_menu_item_new_with_label("Mute Microphone");
-    
-    // Check if microphone is currently muted
-    FILE *mic_mute_fp = popen("amixer get Capture | grep '\\[off\\]'", "r");
-    if (mic_mute_fp) {
-        if (fgets(line, sizeof(line), mic_mute_fp)) {
-            is_mic_muted = TRUE;
-            gtk_check_menu_item_set_active(GTK_CHECK_MENU_ITEM(mic_mute_item), TRUE);
-        } else {
-            is_mic_muted = FALSE;
-        }
-        pclose(mic_mute_fp);
-    }
-    
-    g_signal_connect(mic_mute_item, "toggled", G_CALLBACK(toggle_mic_mute), NULL);
-    gtk_menu_shell_append(GTK_MENU_SHELL(menu), mic_mute_item);
-    gtk_widget_show(mic_mute_item);
-    
-    // Add another separator
-    GtkWidget *separator_after_mic = gtk_separator_menu_item_new();
-    gtk_menu_shell_append(GTK_MENU_SHELL(menu), separator_after_mic);
-    gtk_widget_show(separator_after_mic);
-    
-    // Add output devices if PulseAudio is available
-    if (system("which pactl > /dev/null 2>&1") == 0) {
-        // Output devices section
+
+    // Add output devices if PipeWire is available
+    if (system("which pw-cli > /dev/null 2>&1") == 0) {
         GtkWidget *devices_header = gtk_menu_item_new_with_label("Output Devices");
         gtk_widget_set_sensitive(devices_header, FALSE);
         gtk_menu_shell_append(GTK_MENU_SHELL(menu), devices_header);
         gtk_widget_show(devices_header);
-        
-        // Get current default sink
-        char default_sink[128] = "";
-        FILE *default_fp = popen("pactl info | grep 'Default Sink' | cut -d: -f2", "r");
-        if (default_fp) {
-            if (fgets(default_sink, sizeof(default_sink), default_fp)) {
-                g_strstrip(default_sink);
-            }
-            pclose(default_fp);
-        }
-        
-        // Get output devices
-        fp = popen("pactl list sinks | grep -E 'Sink #|Name:|Description:'", "r");
+
+        fp = popen("pw-cli ls Node | grep -E 'node.id|node.description' | sed 'N;s/\\n/ /'", "r");
         if (fp) {
-            char sink_id[64] = "";
-            char sink_name[128] = "";
-            char sink_desc[256] = "";
-            int count = 0;
-            
-            while (fgets(line, sizeof(line), fp) && count < 10) {
-                g_strchomp(line);
-                
-                if (strstr(line, "Sink #")) {
-                    // New sink entry
-                    if (strlen(sink_name) > 0 && strlen(sink_desc) > 0) {
-                        char label[300];
-                        if (strcmp(g_strstrip(sink_name), default_sink) == 0) {
-                            snprintf(label, sizeof(label), "✓ %s", sink_desc);
-                        } else {
-                            snprintf(label, sizeof(label), "   %s", sink_desc);
-                        }
-                        
-                        GtkWidget *device_item = gtk_menu_item_new_with_label(label);
-                        g_signal_connect(device_item, "activate", G_CALLBACK(select_audio_device), g_strdup(sink_name));
-                        gtk_menu_shell_append(GTK_MENU_SHELL(menu), device_item);
-                        gtk_widget_show(device_item);
-                        count++;
-                    }
-                    
-                    // Reset for new entry
-                    sink_name[0] = '\0';
-                    sink_desc[0] = '\0';
-                } else if (strstr(line, "Name:")) {
-                    sscanf(line, "Name: %s", sink_name);
-                } else if (strstr(line, "Description:")) {
-                    char *desc_start = strchr(line, ':') + 2; // Skip ": "
-                    strncpy(sink_desc, desc_start, sizeof(sink_desc) - 1);
-                    sink_desc[sizeof(sink_desc) - 1] = '\0';
-                }
-            }
-            
-            // Add the last device if any
-            if (strlen(sink_name) > 0 && strlen(sink_desc) > 0) {
-                char label[300];
-                if (strcmp(g_strstrip(sink_name), default_sink) == 0) {
-                    snprintf(label, sizeof(label), "✓ %s", sink_desc);
-                } else {
-                    snprintf(label, sizeof(label), "   %s", sink_desc);
-                }
-                
-                GtkWidget *device_item = gtk_menu_item_new_with_label(label);
-                g_signal_connect(device_item, "activate", G_CALLBACK(select_audio_device), g_strdup(sink_name));
+            char node_id[64] = "";
+            char node_desc[256] = "";
+            while (fgets(line, sizeof(line), fp)) {
+                sscanf(line, "node.id = %s node.description = \"%[^\"]\"", node_id, node_desc);
+                GtkWidget *device_item = gtk_menu_item_new_with_label(node_desc);
+                g_signal_connect(device_item, "activate", G_CALLBACK(select_audio_device), g_strdup(node_id));
                 gtk_menu_shell_append(GTK_MENU_SHELL(menu), device_item);
                 gtk_widget_show(device_item);
             }
-            
-            pclose(fp);
-        }
-        
-        // Add separator before input devices
-        GtkWidget *separator_io = gtk_separator_menu_item_new();
-        gtk_menu_shell_append(GTK_MENU_SHELL(menu), separator_io);
-        gtk_widget_show(separator_io);
-        
-        // Input devices section
-        GtkWidget *inputs_header = gtk_menu_item_new_with_label("Input Devices");
-        gtk_widget_set_sensitive(inputs_header, FALSE);
-        gtk_menu_shell_append(GTK_MENU_SHELL(menu), inputs_header);
-        gtk_widget_show(inputs_header);
-        
-        // Get current default source
-        char default_source[128] = "";
-        default_fp = popen("pactl info | grep 'Default Source' | cut -d: -f2", "r");
-        if (default_fp) {
-            if (fgets(default_source, sizeof(default_source), default_fp)) {
-                g_strstrip(default_source);
-            }
-            pclose(default_fp);
-        }
-        
-        // Get input devices
-        fp = popen("pactl list sources | grep -E 'Source #|Name:|Description:' | grep -v monitor", "r");
-        if (fp) {
-            char source_id[64] = "";
-            char source_name[128] = "";
-            char source_desc[256] = "";
-            int count = 0;
-            
-            while (fgets(line, sizeof(line), fp) && count < 10) {
-                g_strchomp(line);
-                
-                if (strstr(line, "Source #")) {
-                    // New source entry
-                    if (strlen(source_name) > 0 && strlen(source_desc) > 0) {
-                        // Skip monitor sources
-                        if (!strstr(source_name, "monitor")) {
-                            char label[300];
-                            if (strcmp(g_strstrip(source_name), default_source) == 0) {
-                                snprintf(label, sizeof(label), "✓ %s", source_desc);
-                            } else {
-                                snprintf(label, sizeof(label), "   %s", source_desc);
-                            }
-                            
-                            GtkWidget *input_item = gtk_menu_item_new_with_label(label);
-                            g_signal_connect(input_item, "activate", G_CALLBACK(select_audio_input), g_strdup(source_name));
-                            gtk_menu_shell_append(GTK_MENU_SHELL(menu), input_item);
-                            gtk_widget_show(input_item);
-                            count++;
-                        }
-                    }
-                    
-                    // Reset for new entry
-                    source_name[0] = '\0';
-                    source_desc[0] = '\0';
-                } else if (strstr(line, "Name:")) {
-                    sscanf(line, "Name: %s", source_name);
-                } else if (strstr(line, "Description:")) {
-                    char *desc_start = strchr(line, ':') + 2; // Skip ": "
-                    strncpy(source_desc, desc_start, sizeof(source_desc) - 1);
-                    source_desc[sizeof(source_desc) - 1] = '\0';
-                }
-            }
-            
-            // Add the last device if any
-            if (strlen(source_name) > 0 && strlen(source_desc) > 0 && !strstr(source_name, "monitor")) {
-                char label[300];
-                if (strcmp(g_strstrip(source_name), default_source) == 0) {
-                    snprintf(label, sizeof(label), "✓ %s", source_desc);
-                } else {
-                    snprintf(label, sizeof(label), "   %s", source_desc);
-                }
-                
-                GtkWidget *input_item = gtk_menu_item_new_with_label(label);
-                g_signal_connect(input_item, "activate", G_CALLBACK(select_audio_input), g_strdup(source_name));
-                gtk_menu_shell_append(GTK_MENU_SHELL(menu), input_item);
-                gtk_widget_show(input_item);
-            }
-            
             pclose(fp);
         }
     }
-    
-    // Add separator
-    GtkWidget *separator2 = gtk_separator_menu_item_new();
-    gtk_menu_shell_append(GTK_MENU_SHELL(menu), separator2);
-    gtk_widget_show(separator2);
-    
-    // Add audio settings option
-    GtkWidget *settings = gtk_menu_item_new_with_label("Audio Settings...");
-    g_signal_connect(settings, "activate", G_CALLBACK(open_audio_settings), NULL);
-    gtk_menu_shell_append(GTK_MENU_SHELL(menu), settings);
-    gtk_widget_show(settings);
-    
+
     return menu;
 }
 
@@ -1017,10 +847,8 @@ static gboolean on_volume_button_press(GtkWidget *widget, GdkEventButton *event,
         }
         
         audio_menu = create_audio_menu();
-        // Zmienione grawitacje, aby menu wyświetlało się w dół
-        gtk_menu_popup_at_widget(GTK_MENU(audio_menu), widget, 
-                                GDK_GRAVITY_NORTH, GDK_GRAVITY_SOUTH, 
-                                (GdkEvent*)event);
+        // Use gtk_menu_popup_at_pointer to prevent menu from disappearing
+        gtk_menu_popup_at_pointer(GTK_MENU(audio_menu), (GdkEvent*)event);
         return TRUE; // Stop event propagation
     }
     return FALSE;
@@ -1073,10 +901,8 @@ static void on_start_button_clicked(GtkWidget *widget, gpointer data) {
     if (gtk_widget_get_visible(start_menu)) {
         gtk_widget_hide(start_menu);
     } else {
-        GtkAllocation alloc;
-        gtk_widget_get_allocation(widget, &alloc);
-        // Zmienione grawitacje, aby menu wyświetlało się w dół
-        gtk_menu_popup_at_widget(GTK_MENU(start_menu), widget, GDK_GRAVITY_NORTH_WEST, GDK_GRAVITY_SOUTH_WEST, NULL);
+        // Use gtk_menu_popup_at_pointer to prevent menu from disappearing
+        gtk_menu_popup_at_pointer(GTK_MENU(start_menu), NULL);
     }
 }
 
@@ -1176,6 +1002,14 @@ static void build_panel(GtkWidget *panel) {
     gtk_box_pack_end(GTK_BOX(box), clock_label, FALSE, FALSE, 10);
     g_signal_connect(clock_label, "button-press-event", G_CALLBACK(on_clock_button_press), NULL);
     g_timeout_add_seconds(1, update_clock, NULL);
+
+    // Sound applet
+    GtkWidget *volume_event_box = gtk_event_box_new();
+    volume_button = gtk_image_new_from_icon_name("audio-volume-medium", GTK_ICON_SIZE_MENU);
+    gtk_container_add(GTK_CONTAINER(volume_event_box), volume_button);
+    gtk_box_pack_end(GTK_BOX(box), volume_event_box, FALSE, FALSE, 4);
+    g_signal_connect(volume_event_box, "button-press-event", G_CALLBACK(on_volume_button_press), NULL);
+    g_timeout_add_seconds(1, (GSourceFunc)update_volume_icon, NULL);
 
     // Network status icon with click event
     GtkWidget *network_event_box = gtk_event_box_new();
@@ -1283,16 +1117,14 @@ static void search_applications_callback(GtkWidget *entry, gpointer user_data) {
         gchar *name_lower = g_utf8_strdown(app->name, -1);
         
         if (strstr(name_lower, search_lower) != NULL) {
-            // Znaleziono dopasowanie
+            // Found a match
             GtkWidget *app_button = gtk_button_new_with_label(app->name);
             
-            // Tworzymy kopię exec, aby można było ją użyć w funkcji uruchamiającej
-            char *exec_copy = g_strdup(app->exec);
+            // Use g_strdup to pass the exec command correctly
+            g_signal_connect(app_button, "clicked", G_CALLBACK(launch_app), g_strdup(app->exec));
             
-            // Funkcja uruchamiająca aplikację i zamykająca okno dialogowe
-            g_signal_connect_swapped(app_button, "clicked", G_CALLBACK(gtk_widget_destroy), 
-                                    gtk_widget_get_toplevel(results_box));
-            g_signal_connect(app_button, "clicked", G_CALLBACK(launch_app), exec_copy);
+            // Close the parent dialog when the button is clicked
+            g_signal_connect_swapped(app_button, "clicked", G_CALLBACK(gtk_widget_destroy), gtk_widget_get_toplevel(results_box));
             
             gtk_box_pack_start(GTK_BOX(results_box), app_button, FALSE, FALSE, 2);
             gtk_widget_show(app_button);
@@ -1305,7 +1137,7 @@ static void search_applications_callback(GtkWidget *entry, gpointer user_data) {
     
     // Jeśli nie znaleziono wyników, pokaż komunikat
     if (results_count == 0) {
-        GtkWidget *no_results = gtk_label_new("No applications found");
+        GtkWidget *no_results = gtk_label_new("wtf u searching for?");
         gtk_box_pack_start(GTK_BOX(results_box), no_results, FALSE, FALSE, 2);
         gtk_widget_show(no_results);
     }
@@ -1323,9 +1155,9 @@ static void show_about_dialog(GtkWidget *widget, gpointer user_data) {
     GtkWidget *dialog = gtk_about_dialog_new();
     
     // Ustaw właściwości okna dialogowego
-    gtk_about_dialog_set_program_name(GTK_ABOUT_DIALOG(dialog), "Lum-panel");
-    gtk_about_dialog_set_version(GTK_ABOUT_DIALOG(dialog), "1.0");
-    gtk_about_dialog_set_copyright(GTK_ABOUT_DIALOG(dialog), "© 2023 Lum & Bakslerz Team");
+    gtk_about_dialog_set_program_name(GTK_ABOUT_DIALOG(dialog), "Lum Desktop");
+    gtk_about_dialog_set_version(GTK_ABOUT_DIALOG(dialog), "0.1");
+    gtk_about_dialog_set_copyright(GTK_ABOUT_DIALOG(dialog), "© 2025 Lum & Bakslerz Team");
     gtk_about_dialog_set_comments(GTK_ABOUT_DIALOG(dialog), 
         "A lightweight panel for Linux desktop environments.");
     
@@ -1391,7 +1223,7 @@ static gboolean on_window_realized(GtkWidget *window, gpointer user_data) {
         );
         
         // Ustaw rozszerzone struts
-        // Kolejność: lewo, prawo, góra, dół, lewo_start, lewo_koniec, prawo_start, prawo_koniec, 
+        // Kolejność: lewo, prwo, góra, dół, lewo_start, lewo_koniec, prawo_start, prawo_koniec, 
         //            góra_start, góra_koniec, dół_start, dół_koniec
         gulong struts_partial[12] = {0};
         struts_partial[2] = reserved_height;  // Góra
@@ -1440,4 +1272,5 @@ int main(int argc, char *argv[]) {
     gtk_widget_show_all(window);
     gtk_main();
     return 0;
-}
+} 
+
