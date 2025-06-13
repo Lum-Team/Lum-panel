@@ -103,9 +103,7 @@ static GList* get_audio_devices(gboolean input);
 static GtkWidget* create_volume_menu();
 static void on_volume_clicked(GtkWidget *widget, GdkEventButton *event, gpointer user_data);
 static gboolean on_volume_scroll(GtkWidget *widget, GdkEventScroll *event, gpointer user_data);
-static void on_volume_scale_changed(GtkRange *range, gpointer user_data);
-static gboolean on_scale_item_button_press(GtkWidget *widget, GdkEventButton *event, gpointer user_data);
-static gboolean on_volume_scale_scroll(GtkWidget *widget, GdkEventScroll *event, gpointer user_data);
+
 
 
 static gboolean update_volume_status(gpointer data);
@@ -877,63 +875,20 @@ static GtkWidget* create_volume_menu() {
     gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
     gtk_widget_show(item);
     
-    // Suwak głośności 
-    GtkWidget *volume_scale_item = gtk_menu_item_new();
-    gtk_widget_set_can_focus(volume_scale_item, FALSE);
-    
-    GtkWidget *volume_box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 10);
-    gtk_container_set_border_width(GTK_CONTAINER(volume_box), 10);
-    
-    GtkWidget *volume_icon = gtk_image_new_from_icon_name("audio-volume-medium-symbolic", GTK_ICON_SIZE_SMALL_TOOLBAR);
-    GtkWidget *volume_scale = gtk_scale_new_with_range(GTK_ORIENTATION_HORIZONTAL, 0.0, 100.0, 1.0);
-    gtk_widget_set_size_request(volume_scale, 150, -1);
-    gtk_scale_set_draw_value(GTK_SCALE(volume_scale), FALSE);
-    gtk_range_set_value(GTK_RANGE(volume_scale), (double)current_volume);
-    
-    // Dodaj label z wartością
-    char volume_text[16];
-    snprintf(volume_text, sizeof(volume_text), "%d%%", current_volume);
-    GtkWidget *volume_percent_label = gtk_label_new(volume_text);
-    
-    gtk_box_pack_start(GTK_BOX(volume_box), volume_icon, FALSE, FALSE, 0);
-    gtk_box_pack_start(GTK_BOX(volume_box), volume_scale, TRUE, TRUE, 0);
-    gtk_box_pack_start(GTK_BOX(volume_box), volume_percent_label, FALSE, FALSE, 0);
-    
-    gtk_container_add(GTK_CONTAINER(volume_scale_item), volume_box);
-    
-    // Włącz obsługę scroll dla suwaka
-    gtk_widget_add_events(volume_scale, GDK_SCROLL_MASK);
-    
-    g_signal_connect(volume_scale, "value-changed", G_CALLBACK(on_volume_scale_changed), volume_percent_label);
-    g_signal_connect(volume_scale, "scroll-event", G_CALLBACK(on_volume_scale_scroll), volume_percent_label);
-    g_signal_connect(volume_scale_item, "button-press-event", G_CALLBACK(on_scale_item_button_press), NULL);
-    
-    gtk_menu_shell_append(GTK_MENU_SHELL(menu), volume_scale_item);
-    gtk_widget_show_all(volume_scale_item);
-    
-    // Separator
-    GtkWidget *separator = gtk_separator_menu_item_new();
-    gtk_menu_shell_append(GTK_MENU_SHELL(menu), separator);
-    gtk_widget_show(separator);
+    // Wskazówka o scroll'u
+    item = gtk_menu_item_new_with_label("💡 Użyj scroll'a na ikonie do zmiany głośności");
+    gtk_widget_set_sensitive(item, FALSE);
+    gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
+    gtk_widget_show(item);
     
     // Opcje głośności
-    item = gtk_menu_item_new_with_label("� Wycisz/Włącz");
+    item = gtk_menu_item_new_with_label("🔇 Wycisz/Włącz");
     g_signal_connect(item, "activate", G_CALLBACK(toggle_mute), NULL);
     gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
     gtk_widget_show(item);
     
-    item = gtk_menu_item_new_with_label("� Zmniejsz (-10%)");
-    g_signal_connect_swapped(item, "activate", G_CALLBACK(set_volume), GINT_TO_POINTER(MAX(0, current_volume - 10)));
-    gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
-    gtk_widget_show(item);
-    
-    item = gtk_menu_item_new_with_label("� Zwiększ (+10%)");
-    g_signal_connect_swapped(item, "activate", G_CALLBACK(set_volume), GINT_TO_POINTER(MIN(100, current_volume + 10)));
-    gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
-    gtk_widget_show(item);
-    
     // Separator
-    separator = gtk_separator_menu_item_new();
+    GtkWidget *separator = gtk_separator_menu_item_new();
     gtk_menu_shell_append(GTK_MENU_SHELL(menu), separator);
     gtk_widget_show(separator);
     
@@ -1118,57 +1073,7 @@ static gboolean on_volume_scroll(GtkWidget *widget, GdkEventScroll *event, gpoin
     return TRUE; // Event został obsłużony
 }
 
-// Funkcja obsługi zmiany wartości suwaka (poprzez przeciągnięcie)
-static void on_volume_scale_changed(GtkRange *range, gpointer user_data) {
-    double value = gtk_range_get_value(range);
-    int new_volume = (int)value;
-    
-    // Ustaw nową głośność
-    char cmd[256];
-    snprintf(cmd, sizeof(cmd), "amixer -D pulse sset Master %d%%", new_volume);
-    system(cmd);
-    
-    // Alternatywnie dla pipewire/pulseaudio
-    snprintf(cmd, sizeof(cmd), "pactl set-sink-volume @DEFAULT_SINK@ %d%%", new_volume);
-    system(cmd);
-    
-    // Aktualizuj label jeśli został przekazany jako user_data
-    if (user_data && GTK_IS_LABEL(user_data)) {
-        char volume_text[16];
-        snprintf(volume_text, sizeof(volume_text), "%d%%", new_volume);
-        gtk_label_set_text(GTK_LABEL(user_data), volume_text);
-    }
-    
-    // Aktualizuj ikonę
-    update_volume_icon();
-}
 
-// Funkcja zapobiegająca zamykaniu menu gdy klikniesz na suwak
-static gboolean on_scale_item_button_press(GtkWidget *widget, GdkEventButton *event, gpointer user_data) {
-    return TRUE; // Zapobiega aktywacji menu item
-}
-
-// Funkcja obsługi scroll wheel na suwaku głośności w menu
-static gboolean on_volume_scale_scroll(GtkWidget *widget, GdkEventScroll *event, gpointer user_data) {
-    GtkRange *range = GTK_RANGE(widget);
-    double current_value = gtk_range_get_value(range);
-    double new_value = current_value;
-    
-    if (event->direction == GDK_SCROLL_UP) {
-        // Scroll w górę - zwiększ głośność o 5%
-        new_value = MIN(100.0, current_value + 5.0);
-    } else if (event->direction == GDK_SCROLL_DOWN) {
-        // Scroll w dół - zmniejsz głośność o 5%
-        new_value = MAX(0.0, current_value - 5.0);
-    }
-    
-    if (new_value != current_value) {
-        // Ustaw nową wartość na suwaku (to automatycznie wywoła on_volume_scale_changed)
-        gtk_range_set_value(range, new_value);
-    }
-    
-    return TRUE; // Event został obsłużony
-}
 
 
 
