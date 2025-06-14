@@ -88,10 +88,3 @@ To start it manually:
 ```bash
 lum-panel
 ```
-
-## Configuration
-
-Right-click on the panel to access settings, including:
-- Opacity adjustment
-- Auto-hide functionality
-- Background and foreground colors
